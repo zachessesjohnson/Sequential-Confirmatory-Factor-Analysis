@@ -1,0 +1,339 @@
+---
+title: "Methods Paper Most Complex Model"
+author: "Zachary Esses Johnson"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Libraries**
+```{r, warning = FALSE, message = FALSE}
+library(lavaan)
+library(MASS)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+```
+
+$~$
+
+**Set Workpath**
+```{r}
+workpath <- "C:/Users/zejpo/OneDrive/Documents/Work/Methods Paper"
+
+setwd(workpath)
+```
+
+$~$
+
+**Set Seed**
+```{r}
+set.seed(999)
+```
+
+$~$
+
+**Simulation Parameters**
+```{r}
+real_params <- list(
+  n_sims = 100, # Iterations
+  sample_sizes = c(200, 500, 1000), # Sample Sizes
+  error_levels = c(0.2, 0.4, 0.6),  # Error Levels
+  factor_distributions = c("Normal", "Skewed"), # Factor Distributions
+  heteroskedasticity = c("Homoskedastic", "Heteroskedastic"), # Error Variance
+  cross_loadings = c(0, 0.2) # Cross-Loadings
+)
+```
+
+$~$
+
+**Covariance Matrix for Latent Factors**
+```{r}
+real_cov_matrix <- matrix(0.3, nrow = 5, ncol = 5) # Matrix for 5 factors
+diag(real_cov_matrix) <- 1.0 # Set covariance matrix diagonal to 1
+```
+
+$~$
+
+**Real Simulation Loop**
+```{r, warning = FALSE}
+# Dataframe to store results
+real_results <- data.frame()
+
+# Runs simulations 100 times
+for(sim in 1:real_params$n_sims) {
+  
+  # Loop for varied sample sizes
+  for(n in real_params$sample_sizes) {
+    
+    # Loop for varied error levels
+    for(error in real_params$error_levels) {
+      
+      # Loop for varied factor distributions
+      for(factor_dist in real_params$factor_distributions) {
+        
+        # Loop for heteroskedasticity
+        for(hetero in real_params$heteroskedasticity) {
+          
+          # Loop for cross-loadings
+          for(cross in real_params$cross_loadings) {
+          
+            # Generate matrix of true latent factors
+            true_factors <- if (factor_dist == "Skewed") {
+              matrix(rgamma(n * 5, shape = 2, scale = 1), ncol = 5) # Gamma distribution for skewed factors
+            } else {
+              mvrnorm(n, mu = rep(0, 5), Sigma = real_cov_matrix) # Multivariate normal for normal factors
+            }
+            
+            # Construct true second-order latent factor without added noise
+            H_true <- rowMeans(true_factors)
+          
+            # Set factor loadings
+            loadings <- c(0.6, 0.7, 0.8, 0.9, 0.5, 0.65)
+          
+            # Generate residual variance
+            error_variances <- if (hetero == "Heteroskedastic") {
+              rep(c(0.1, 0.3, 0.5, 0.2, 0.4, 0.3), length.out = 15)
+            } else {
+              rep(error, 15)
+            }
+          
+            # Generate error matrix
+            error_matrix <- matrix(0, nrow = n, ncol = 15)
+            for(i in 1:15) {
+              error_matrix[,i] <- rnorm(n, sd = sqrt(error_variances[i]))
+            }
+            
+            # Generate observed data
+            observed_data <- cbind(
+              true_factors[,1] * loadings[1] + error_matrix[,1],
+              true_factors[,1] * loadings[2] + error_matrix[,2] + cross * true_factors[,2],
+              true_factors[,1] * loadings[3] + error_matrix[,3],
+              true_factors[,2] * loadings[1] + error_matrix[,4],
+              true_factors[,2] * loadings[2] + error_matrix[,5] + cross * true_factors[,3],
+              true_factors[,2] * loadings[3] + error_matrix[,6],
+              true_factors[,3] * loadings[1] + error_matrix[,7],
+              true_factors[,3] * loadings[2] + error_matrix[,8],
+              true_factors[,3] * loadings[3] + error_matrix[,9] + cross * true_factors[,4],
+              true_factors[,4] * loadings[1] + error_matrix[,10],
+              true_factors[,4] * loadings[2] + error_matrix[,11],
+              true_factors[,4] * loadings[3] + error_matrix[,12],
+              true_factors[,5] * loadings[1] + error_matrix[,13] + cross * true_factors[,1],
+              true_factors[,5] * loadings[2] + error_matrix[,14],
+              true_factors[,5] * loadings[3] + error_matrix[,15]
+            )
+            
+            # Standardize observed variables and convert to dataframe
+            real_data <- as.data.frame(scale(observed_data))
+            colnames(real_data) <- paste0("V", 1:15)
+          
+            # Step 1 CFA model
+            real_model_1 <- "
+              f1 =~ V1 + V2 + V3
+              f2 =~ V4 + V5 + V6
+              f3 =~ V7 + V8 + V9
+              f4 =~ V10 + V11 + V12
+              f5 =~ V13 + V14 + V15
+              
+              V2 ~~ V3
+              V4 ~~ V5
+              V7 ~~ V8
+              V10 ~~ V12
+              V13 ~~ V14
+            "
+          
+            # Step 2 CFA model
+            real_model_2 <- "
+              G1 =~ f1 + f2
+              G2 =~ f3 + f4
+              H =~ G1 + G2 + f5
+            "
+            
+            # Full model merge
+            real_model_full <- paste0(real_model_1, "\n", real_model_2)
+            
+            # Fitting models
+            tryCatch({
+              real_fit1 <- cfa(real_model_1, data = real_data, estimator = "MLR")
+              
+              if(lavInspect(real_fit1, "converged")) {
+                
+                # Predict scores from step 1
+                step1_scores <- lavPredict(real_fit1, method = "Regression")
+                step1_scores <- scale(step1_scores)
+                
+                # Step 2 CFA estimation using predicted scores from step 1
+                real_fit2 <- cfa(real_model_2, data = as.data.frame(step1_scores), estimator = "MLR")
+                
+                if(lavInspect(real_fit2, "converged")) {
+                  
+                  # Predict second-order factor scores
+                  step2_scores <- lavPredict(real_fit2, method = "Regression")
+                  
+                  # Correlation between predicted and true mean factor scores
+                  step2_cor <- cor(step2_scores[, "H"], H_true)
+                  
+                  # Estimate full hierarchical CFA model
+                  real_fit_full <- cfa(real_model_full, data = real_data, estimator = "MLR")
+                  
+                  if(lavInspect(real_fit_full, "converged")) {
+                    
+                    # Predict full model factor scores
+                    std_scores <- lavPredict(real_fit_full, method = "Regression")
+                    
+                    # Correlation between predicted and true mean factor scores
+                    std_cor <- cor(std_scores[, "H"], H_true)
+                    
+                    # Calculate RMSE for both methods
+                    step2_rmse <- sqrt(mean((scale(step2_scores[, "H"]) - scale(H_true))^2, na.rm = TRUE))
+                    std_rmse <- sqrt(mean((scale(std_scores[, "H"]) - scale(H_true))^2, na.rm = TRUE))
+                    
+                    # Bind results to dataframe
+                    real_results <- rbind(real_results, data.frame(
+                      sim = sim, 
+                      n = n, 
+                      error = error, 
+                      factor_dist = factor_dist, 
+                      hetero = hetero,
+                      cross_loading = cross,
+                      step2_cor = step2_cor, 
+                      std_cor = std_cor,
+                      cor_diff = step2_cor - std_cor,
+                      step2_rmse = step2_rmse, 
+                      std_rmse = std_rmse
+                    ))
+                  }
+                }
+              }
+            }, error = function(e) { cat("Error:", e$message, "\n") })
+          }
+        }
+      }
+    }
+  }
+  # Print progress
+  cat("Completed simulation", sim, "of", real_params$n_sims, "\n")
+}
+```
+
+$~$
+
+**Data Save**
+```{r}
+saveRDS(real_results, "mostcomplex_results_real.rds")
+```
+
+$~$
+
+**Read Data**
+```{r}
+real_results <- readRDS("mostcomplex_results_real.rds")
+```
+
+$~$
+
+**Summary**
+```{r}
+rmse_real_summary <- real_results %>%
+  group_by(n, factor_dist, hetero) %>%
+  summarise(
+    mean_step2_rmse = mean(step2_rmse, na.rm = TRUE),  
+    mean_std_rmse = mean(std_rmse, na.rm = TRUE),  
+    .groups = "drop"
+  )
+print(rmse_real_summary)
+```
+
+$~$
+
+**T-Test Between Sequential and Standard RMSE Values**
+```{r}
+t_test <- t.test(real_results$step2_rmse, real_results$std_rmse, paired = TRUE)
+print(t_test)
+```
+
+$~$
+
+**Boxplot for RMSE Distributions**
+```{r}
+# Reshape Data
+long_results <- real_results %>%
+  select(Sequential = step2_rmse, Traditional = std_rmse) %>%
+  pivot_longer(cols = everything(), names_to = "Method", values_to = "RMSE")
+
+# Boxplot
+ggplot(long_results, aes(x = Method, y = RMSE, fill = Method)) +
+  geom_boxplot(width = 0.6, outlier.shape = 16, outlier.alpha = 0.3) +
+  scale_fill_manual(values = c("Sequential" = "darkgreen", "Traditional" = "red")) +
+  labs(
+    x = NULL,
+    y = "Root Mean Squared Error (RMSE)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(face = "bold")
+  )
+```
+
+$~$
+
+**Table for RMSEs across Conditions**
+```{r}
+latex_table <- knitr::kable(
+  rmse_real_summary,
+  format = "latex",
+  booktabs = TRUE,
+  digits = 3,
+  caption = "Mean RMSE by Sample Size, Factor Distribution, and Heteroskedasticity"
+)
+
+cat(latex_table)
+```
+
+$~$
+
+**RMSE Density Comparison**
+```{r}
+ggplot(real_results) +
+  geom_density(aes(x = step2_rmse, fill = "Sequential"), alpha = 0.5) +
+  geom_density(aes(x = std_rmse, fill = "Traditional"), alpha = 0.5) +
+  facet_grid(factor_dist ~ hetero) +
+  theme_minimal() +
+  labs(
+    x = "RMSE",
+    y = "Density",
+    fill = "Method"
+  ) +
+  scale_fill_manual(values = c("Sequential" = "darkgreen", "Traditional" = "red"))
+```
+
+$~$
+
+**Correlation Comparison**
+```{r}
+cor_t_test <- t.test(real_results$step2_cor, real_results$std_cor, paired = TRUE)
+print(cor_t_test)
+```
+
+$~$
+
+**Correlation Differences Across Conditions**
+```{r}
+ggplot(real_results, aes(x = factor(n), y = cor_diff, fill = factor_dist)) +
+  geom_boxplot() +
+  facet_wrap(~hetero) +
+  theme_minimal() +
+  labs(
+    x = "Sample Size",
+    y = "Correlation Difference (Sequential - Traditional)",
+    fill = "Factor Distribution"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
