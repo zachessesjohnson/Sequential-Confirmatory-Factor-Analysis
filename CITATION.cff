@@ -1,0 +1,14 @@
+CFF-Version: 1.0
+
+message: "A Citation File Format (CFF) file for the research article"
+
+authors:
+  - given-names: Zachary
+    family-names: Johnson
+    name: Zachary Esses Johnson
+    affiliation: University of Virginia
+    orcid: https://orcid.org/0009-0005-9056-4647
+
+title: "Sequential Confirmatory Factor Analysis"
+doi: "10.1234/example.doi"
+url: "https://example.com"
