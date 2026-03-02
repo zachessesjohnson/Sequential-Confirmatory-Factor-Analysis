@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software or method, please cite it using the metadata below."
+type: software
+title: "Sequential Confirmatory Factor Analysis"
+abstract: >
+  Sequential CFA is a novel approach to hierarchical Confirmatory Factor Analysis
+  that estimates each stage independently, allowing for estimation of small-N samples.
+  Factor score estimation in small sample sizes often encounters parameter bias and
+  convergence failures when constructing hierarchical national/sub-national indices.
+  This method calculates factor scores sequentially from the lowest to highest levels,
+  keeping the original sample size in each step and removing cross-level covariance
+  estimation.
+authors:
+  - alias: "zachessesjohnson"
+    # TODO: Update with author's full name (family-names, given-names) once publicly available.
+repository-code: "https://github.com/zachessesjohnson/Sequential-Confirmatory-Factor-Analysis"
+license: Apache-2.0
+identifiers:
+  - type: url
+    value: "https://osf.io/preprints/osf/akxtv_v2"
+    description: "OSF Preprint"
+keywords:
+  - confirmatory factor analysis
+  - hierarchical factor analysis
+  - small sample sizes
+  - latent variable modeling
+  - Monte Carlo simulation
+  - WJP Rule of Law Index
