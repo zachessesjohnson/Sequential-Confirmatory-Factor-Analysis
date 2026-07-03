@@ -199,18 +199,20 @@ scfa_propagation_diagnostics <- function(fit, threshold = 0.70) {
 #' loadings \eqn{\tilde\lambda_{2,k}} are attenuated by the factor-score
 #' reliability:
 #' \deqn{\tilde\lambda_{2,k} \approx \rho_k \lambda_{2,k,0}.}
-#' This function reverses the attenuation:
+#' Here \eqn{k} indexes the Stage-1 factors, each of which appears as an
+#' *observed indicator* (a row) in the Stage-2 loading matrix.  This function
+#' reverses the attenuation row-wise:
 #' \deqn{\hat\lambda_{2,k}^{\text{corr}} = \frac{\hat{\tilde\lambda}_{2,k}}{\hat\rho_k},}
 #' producing estimates that match the Bartlett-score (unbiased) loadings.
 #'
 #' @param fit2 A fitted \code{lavaan} CFA object for the Stage-2 model.
-#'   Its latent variables must correspond (in order) to the first-order
-#'   factors of \code{fit1}.
+#'   Its observed variables must be the Stage-1 factor scores, one per
+#'   first-order factor of \code{fit1} (in the same order).
 #' @param fit1 A fitted \code{lavaan} CFA object for the Stage-1 model.
 #'   Used to compute \eqn{\hat\rho_k} via \code{\link{scfa_factor_reliability}}.
 #'
 #' @return A matrix of the same dimensions as the Stage-2 loading matrix,
-#'   with each column \eqn{k} divided by \eqn{\hat\rho_k}.  Entries that
+#'   with each row \eqn{k} divided by \eqn{\hat\rho_k}.  Entries that
 #'   were exactly zero in the original matrix remain zero (cross-loadings
 #'   fixed to zero are not corrected).
 #'
@@ -240,20 +242,25 @@ scfa_correct_loadings <- function(fit2, fit1) {
   lambda2 <- lavaan::lavInspect(fit2, "est")$lambda
   rho     <- scfa_factor_reliability(fit1)
 
-  k2 <- ncol(lambda2)
+  # lambda2 is (p2 x k2): rows are Stage-1 factor scores used as Stage-2
+  # observed indicators; columns are Stage-2 latent factors.
+  # The attenuation lambda_2k ~ rho_k * lambda_2k,0 is indexed by the
+  # Stage-1 factor k, i.e. by *row* of lambda2.
+  p2 <- nrow(lambda2)
   k1 <- length(rho)
-  if (k2 != k1) {
+  if (p2 != k1) {
     stop(
-      "The Stage-2 model has ", k2, " latent variable(s) but the Stage-1 model ",
-      "has ", k1, " factor(s).  They must match."
+      "The Stage-2 loading matrix has ", p2, " row(s) (observed indicator(s)) ",
+      "but the Stage-1 model has ", k1, " factor(s).  They must match: each ",
+      "Stage-1 factor score should appear as one observed variable in Stage 2."
     )
   }
 
-  # Divide each column k by rho_k, but only for non-zero entries.
+  # Divide each row k by rho_k, but only for non-zero entries.
   corrected <- lambda2
-  for (k in seq_len(k2)) {
-    nz            <- lambda2[, k] != 0
-    corrected[nz, k] <- lambda2[nz, k] / rho[k]
+  for (k in seq_len(p2)) {
+    nz              <- lambda2[k, ] != 0
+    corrected[k, nz] <- lambda2[k, nz] / rho[k]
   }
 
   corrected
