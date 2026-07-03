@@ -77,22 +77,22 @@ Sequential-Confirmatory-Factor-Analysis/
 ├── README.md                              # This file
 ├── LICENSE                                # Apache-2.0 license
 ├── CITATION.cff                           # Machine-readable citation metadata
-└── Sequential_CFA_Paper___OSF_Preprint.pdf  # Preprint manuscript (PDF)
+├── Sequential_CFA_Paper___OSF_Preprint.pdf  # Preprint manuscript (PDF)
+└── R/
+    └── scfa_propagation.R                 # Error-propagation diagnostic functions
 ```
 
-> **TODO:** Once analysis scripts and/or data are added to this repository, update this section to describe the folder structure (e.g., `R/`, `data/`, `output/`, `simulations/`).
+> **TODO:** Once additional analysis scripts and/or data are added to this repository, update this section further (e.g., `data/`, `output/`, `simulations/`).
 
 ---
 
 ## Installation / Requirements
 
-> **TODO:** This section will be updated once analysis scripts are published. The following is a suggested setup based on the methods described in the paper.
-
-The analysis is expected to require **R** (the standard environment for CFA via packages such as `lavaan`). Suggested requirements:
+The analysis requires **R** (the standard environment for CFA via packages such as `lavaan`). Requirements:
 
 - **R** ≥ 4.0.0
 - R packages:
-  - [`lavaan`](https://lavaan.ugent.be/) – for CFA model fitting
+  - [`lavaan`](https://lavaan.ugent.be/) – for CFA model fitting at each stage
   - [`blavaan`](https://ecmerkle.github.io/blavaan/) – for Bayesian CFA
   - Additional packages for data manipulation and visualization (e.g., `tidyverse`, `ggplot2`)
 
@@ -100,6 +100,12 @@ The analysis is expected to require **R** (the standard environment for CFA via 
 
 ```r
 install.packages(c("lavaan", "blavaan", "tidyverse", "ggplot2"))
+```
+
+### Loading the SCFA helper functions
+
+```r
+source("R/scfa_propagation.R")   # requires lavaan to be installed
 ```
 
 > **TODO:** Confirm exact R version and package versions used in the analysis and add a `renv.lock` or `sessionInfo()` output for reproducibility.
@@ -134,31 +140,85 @@ Suggested workflow based on the paper's methodology:
 
 ## Usage Examples
 
-> **TODO:** Add concrete usage examples once analysis scripts are available.
+### Error-propagation diagnostics (recommended pre-Stage-2 check)
 
-The following is a conceptual example of the sequential CFA workflow using `lavaan` in R:
+Source the helper file and run the diagnostics on your fitted Stage-1 model to
+assess how much estimation error will propagate forward before you ever run
+Stage 2.
 
 ```r
 library(lavaan)
+source("R/scfa_propagation.R")
 
-# Stage 1: Lower-level CFA on observed indicators
+# --- Stage 1: fit lower-level CFA ---
 model_stage1 <- '
   subfactor1 =~ item1 + item2 + item3
   subfactor2 =~ item4 + item5 + item6
 '
 fit_stage1 <- cfa(model_stage1, data = lower_level_data)
 
-# Extract factor scores from Stage 1
-scores_stage1 <- lavPredict(fit_stage1)
+# Full diagnostic table (one row per factor)
+diag <- scfa_propagation_diagnostics(fit_stage1)
+print(diag)
+#   factor n_indicators  I_k psi_nu phi_k rho_k  flag
+# 1     f1            3 8.42   0.12   1.0  0.894 FALSE
+# 2     f2            3 3.17   0.32   1.0  0.760 FALSE
 
-# Stage 2: Upper-level CFA using Stage 1 factor scores as inputs
-upper_level_data <- as.data.frame(scores_stage1)
+# Individual quantities
+scfa_factor_information(fit_stage1)   # I_k
+scfa_propagation_variance(fit_stage1) # psi_nu_k = 1 / I_k
+scfa_factor_reliability(fit_stage1)   # rho_k
+```
+
+A factor with `rho_k < 0.70` (the default `threshold` in
+`scfa_propagation_diagnostics()`) is flagged as a weak link where propagation
+is material.
+
+### Correcting Stage-2 loadings for regression-score attenuation
+
+If you used **regression** factor scores as Stage-2 inputs, the loadings are
+attenuated by a factor of `rho_k`.  Recover unbiased estimates with:
+
+```r
+# --- Stage 2: upper-level CFA using Stage-1 scores as inputs ---
+upper_level_data <- as.data.frame(lavPredict(fit_stage1, method = "regression"))
 model_stage2 <- '
   higher_factor =~ subfactor1 + subfactor2
 '
 fit_stage2 <- cfa(model_stage2, data = upper_level_data)
 
-# Extract final index scores
+# De-attenuate the Stage-2 loadings
+corrected_lambda <- scfa_correct_loadings(fit_stage2, fit_stage1)
+```
+
+Under **Bartlett** scores no correction is needed (loadings are already
+asymptotically unbiased), but the propagated error variance `psi_nu_k` still
+inflates Stage-2 residual variances by the known amount
+`hat_psi_nu_k = 1 / hat_I_k`.
+
+### Complete sequential CFA workflow
+
+```r
+library(lavaan)
+source("R/scfa_propagation.R")
+
+# Stage 1
+model_stage1 <- '
+  subfactor1 =~ item1 + item2 + item3
+  subfactor2 =~ item4 + item5 + item6
+'
+fit_stage1 <- cfa(model_stage1, data = lower_level_data)
+
+# Pre-Stage-2 propagation check
+diag <- scfa_propagation_diagnostics(fit_stage1, threshold = 0.70)
+print(diag)
+
+# Stage 2
+scores_stage1    <- as.data.frame(lavPredict(fit_stage1))
+model_stage2     <- 'higher_factor =~ subfactor1 + subfactor2'
+fit_stage2       <- cfa(model_stage2, data = scores_stage1)
+
+# Final index scores
 index_scores <- lavPredict(fit_stage2)
 ```
 
