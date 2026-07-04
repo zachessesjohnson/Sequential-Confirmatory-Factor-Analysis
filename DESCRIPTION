@@ -1,0 +1,30 @@
+Package: scfa
+Title: Sequential Confirmatory Factor Analysis
+Version: 0.1.0
+Authors@R: 
+    person("Zach", "Essesjohnson", role = c("aut", "cre"),
+           email = "zachessesjohnson@users.noreply.github.com")
+Description: Implements Sequential Confirmatory Factor Analysis (Sequential CFA),
+    a hierarchical factor analysis approach that estimates each level of the
+    hierarchy independently rather than simultaneously. This preserves the full
+    sample size at each stage, removes cross-level covariance estimation, and
+    provides valid estimates in cases where traditional or Bayesian CFA fail to
+    converge. The package provides error-propagation diagnostics, loading
+    corrections for regression-score attenuation, residual variance corrections
+    for Bartlett scores, a multi-stage propagation chain helper, and a
+    high-level orchestration function for running the full sequential workflow.
+License: Apache License (>= 2)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    lavaan (>= 0.6-0)
+Suggests:
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    ggplot2
+VignetteBuilder: knitr
+URL: https://github.com/zachessesjohnson/Sequential-Confirmatory-Factor-Analysis
+BugReports: https://github.com/zachessesjohnson/Sequential-Confirmatory-Factor-Analysis/issues
+Config/testthat/edition: 3

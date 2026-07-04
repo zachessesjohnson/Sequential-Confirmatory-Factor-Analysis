@@ -19,9 +19,10 @@
     stop("'fit' must be a fitted lavaan object.")
   }
 
-  lambda <- lavaan::lavInspect(fit, "est")$lambda   # p x k loading matrix
-  theta  <- diag(lavaan::lavInspect(fit, "est")$theta) # length-p residual variances
-  phi    <- diag(lavaan::lavInspect(fit, "est")$psi)   # length-k factor variances
+  est    <- lavaan::lavInspect(fit, "est")
+  lambda <- est$lambda                  # p x k loading matrix
+  theta  <- diag(est$theta)            # length-p residual variances
+  phi    <- diag(est$psi)              # length-k factor variances
 
   list(lambda = lambda, theta = theta, phi = phi)
 }
@@ -53,6 +54,7 @@
 #' scfa_factor_information(fit)
 #' }
 #'
+#' @importFrom lavaan lavInspect
 #' @export
 scfa_factor_information <- function(fit) {
   p <- .scfa_extract_params(fit)
@@ -178,7 +180,7 @@ scfa_propagation_diagnostics <- function(fit, threshold = 0.70) {
   # Count non-zero (primary) loadings per factor
   n_ind <- colSums(lambda != 0)
 
-  data.frame(
+  data_out <- data.frame(
     factor      = names(info),
     n_indicators = as.integer(n_ind),
     I_k         = unname(info),
@@ -189,6 +191,9 @@ scfa_propagation_diagnostics <- function(fit, threshold = 0.70) {
     stringsAsFactors = FALSE,
     row.names   = NULL
   )
+  attr(data_out, "threshold") <- threshold
+  class(data_out) <- c("scfa_diagnostics", "data.frame")
+  data_out
 }
 
 
@@ -264,4 +269,298 @@ scfa_correct_loadings <- function(fit2, fit1) {
   }
 
   corrected
+}
+
+
+# -----------------------------------------------------------------------------
+#' Correct Stage-2 residual variances for Bartlett-score propagation error
+#'
+#' When **Bartlett** factor scores are used as Stage-2 inputs, the Stage-2
+#' loading estimates are asymptotically unbiased, but each Stage-2 residual
+#' variance is inflated by the propagated estimation-error variance of the
+#' corresponding Stage-1 factor:
+#' \deqn{\hat\theta_{2,k}^{\text{adj}} = \hat\theta_{2,k} - \hat\psi_{\nu_1,k},}
+#' where \eqn{\hat\psi_{\nu_1,k} = 1/\hat{I}_k} is the propagation variance
+#' returned by \code{\link{scfa_propagation_variance}}.
+#'
+#' The adjustment is applied only to non-zero diagonal entries of
+#' \eqn{\boldsymbol{\Theta}_2}.  Cross-indicator residual covariances (off-diagonal
+#' entries) are left unchanged.
+#'
+#' @param fit2 A fitted \code{lavaan} CFA object for the Stage-2 model.
+#'   Its observed variables must be the Stage-1 Bartlett factor scores, one per
+#'   first-order factor of \code{fit1} (in the same order).
+#' @param fit1 A fitted \code{lavaan} CFA object for the Stage-1 model.
+#'   Used to compute \eqn{\hat\psi_{\nu_1,k}} via
+#'   \code{\link{scfa_propagation_variance}}.
+#'
+#' @return A numeric vector of length equal to the number of Stage-1 factors,
+#'   giving the adjusted Stage-2 residual variances
+#'   \eqn{\hat\theta_{2,k}^{\text{adj}}}.  Entries that are already zero or
+#'   would become negative after adjustment are clamped to zero, with a warning.
+#'
+#' @details
+#' This correction is intended for **Bartlett** factor scores only.  Under
+#' regression scores the loadings are already attenuated; use
+#' \code{\link{scfa_correct_loadings}} instead (and note that the residual
+#' inflation is then absorbed into the attenuation bias).  The function emits
+#' a message reminding the analyst of this distinction.
+#'
+#' @examples
+#' \dontrun{
+#' scores_bart <- as.data.frame(lavPredict(fit_stage1, method = "bartlett"))
+#' fit_stage2  <- cfa(model_stage2, data = scores_bart)
+#' adj_theta   <- scfa_correct_residuals(fit_stage2, fit_stage1)
+#' }
+#'
+#' @importFrom lavaan lavInspect
+#' @export
+scfa_correct_residuals <- function(fit2, fit1) {
+  if (!inherits(fit2, "lavaan") || !inherits(fit1, "lavaan")) {
+    stop("Both 'fit1' and 'fit2' must be fitted lavaan objects.")
+  }
+
+  message(
+    "Note: scfa_correct_residuals() assumes Bartlett factor scores were used\n",
+    "at Stage 1.  Under regression scores the loading attenuation absorbs\n",
+    "the residual inflation; use scfa_correct_loadings() instead."
+  )
+
+  theta2  <- diag(lavaan::lavInspect(fit2, "est")$theta)  # Stage-2 residual variances
+  psi_nu  <- scfa_propagation_variance(fit1)               # 1/I_k per Stage-1 factor
+
+  p2 <- length(theta2)
+  k1 <- length(psi_nu)
+  if (p2 != k1) {
+    stop(
+      "The Stage-2 residual vector has ", p2, " element(s) but the Stage-1 ",
+      "model has ", k1, " factor(s).  They must match: each Stage-1 factor ",
+      "score should appear as one observed variable in Stage 2."
+    )
+  }
+
+  # Align psi_nu to theta2 order if names are available
+  if (!is.null(names(theta2)) && !is.null(names(psi_nu))) {
+    common <- intersect(names(theta2), names(psi_nu))
+    if (length(common) == p2) {
+      psi_nu <- psi_nu[names(theta2)]
+    }
+  }
+
+  adj <- theta2 - psi_nu
+
+  # Clamp negative adjustments to zero with a warning
+  neg <- which(adj < 0)
+  if (length(neg) > 0) {
+    warning(
+      "Adjusted residual variance(s) for factor(s) [",
+      paste(names(adj)[neg], collapse = ", "),
+      "] would be negative after subtracting psi_nu; clamped to 0. ",
+      "This may indicate the Stage-1 model is poorly identified or that ",
+      "regression scores (not Bartlett) were used."
+    )
+    adj[neg] <- 0
+  }
+
+  adj
+}
+
+
+# -----------------------------------------------------------------------------
+#' Accumulate propagation variances across a multi-stage sequential CFA chain
+#'
+#' In a hierarchy with more than two stages, estimation error accumulates at
+#' each stage.  Given a list of fitted \code{lavaan} objects
+#' \eqn{(\text{fit}_1, \text{fit}_2, \ldots, \text{fit}_S)}, this function
+#' sums the propagated error variances stage by stage:
+#' \deqn{\Psi_{\nu,k}^{(s)} = \sum_{t=1}^{s} \psi_{\nu,k}^{(t)},}
+#' where \eqn{\psi_{\nu,k}^{(t)} = 1/I_k^{(t)}} is the propagation variance
+#' contributed by stage \eqn{t}.
+#'
+#' This is the key diagnostic for three- or higher-level hierarchies (e.g.
+#' item \eqn{\to} sub-factor \eqn{\to} factor \eqn{\to} index), where a
+#' practitioner needs to know how much total noise has accumulated by the time
+#' Stage-\eqn{S} inputs are formed.
+#'
+#' @param fits A named or unnamed list of fitted \code{lavaan} CFA objects, one
+#'   per stage, ordered from lowest (Stage 1) to highest (Stage S) level.
+#'   Each element must be a \code{lavaan} object.
+#'
+#' @return A list with one element per stage, each being a named numeric vector
+#'   of cumulative propagation variances for the factors estimated at that
+#'   stage.  The final element therefore contains the total accumulated
+#'   propagation variance entering the final stage's inputs.
+#'
+#' @examples
+#' \dontrun{
+#' chain <- scfa_propagate_chain(list(fit_stage1, fit_stage2))
+#' # Cumulative propagation variance after Stage 1:
+#' chain[[1]]
+#' # Cumulative propagation variance after Stage 2:
+#' chain[[2]]
+#' }
+#'
+#' @importFrom lavaan lavInspect
+#' @export
+scfa_propagate_chain <- function(fits) {
+  if (!is.list(fits) || length(fits) < 1) {
+    stop("'fits' must be a non-empty list of lavaan objects.")
+  }
+  for (i in seq_along(fits)) {
+    if (!inherits(fits[[i]], "lavaan")) {
+      stop("Element ", i, " of 'fits' is not a lavaan object.")
+    }
+  }
+
+  stage_names <- names(fits)
+  if (is.null(stage_names)) {
+    stage_names <- paste0("stage_", seq_along(fits))
+  }
+
+  result <- vector("list", length(fits))
+  names(result) <- stage_names
+
+  cumulative <- NULL
+  for (s in seq_along(fits)) {
+    psi_s <- scfa_propagation_variance(fits[[s]])
+    if (is.null(cumulative)) {
+      cumulative <- psi_s
+    } else {
+      # Attempt to align by name; fall back to positional alignment
+      if (!is.null(names(cumulative)) && !is.null(names(psi_s)) &&
+          length(intersect(names(cumulative), names(psi_s))) == length(psi_s)) {
+        cumulative <- cumulative[names(psi_s)] + psi_s
+      } else {
+        if (length(psi_s) != length(cumulative)) {
+          warning(
+            "Stage ", s, " has ", length(psi_s), " factor(s) but the ",
+            "cumulative vector has ", length(cumulative), " element(s); ",
+            "using positional alignment."
+          )
+          min_len     <- min(length(psi_s), length(cumulative))
+          cumulative  <- cumulative[seq_len(min_len)] + psi_s[seq_len(min_len)]
+        } else {
+          cumulative <- cumulative + psi_s
+        }
+      }
+    }
+    result[[s]] <- cumulative
+  }
+
+  result
+}
+
+
+# -----------------------------------------------------------------------------
+#' Print method for \code{scfa_diagnostics} objects
+#'
+#' Prints the diagnostic table returned by
+#' \code{\link{scfa_propagation_diagnostics}}, with flagged rows clearly
+#' marked.
+#'
+#' @param x An object of class \code{scfa_diagnostics}.
+#' @param ... Additional arguments (currently ignored).
+#'
+#' @return \code{x}, invisibly.
+#'
+#' @export
+print.scfa_diagnostics <- function(x, ...) {
+  thr <- attr(x, "threshold")
+  cat("Sequential CFA – Error-Propagation Diagnostics\n")
+  if (!is.null(thr)) {
+    cat(sprintf("Reliability threshold: %.2f  (flagged if rho_k < threshold)\n", thr))
+  }
+  cat("\n")
+
+  # Build a display copy with a ✓/✗ column replacing the logical flag
+  disp            <- x
+  disp$flag       <- ifelse(x$flag, "FLAG", "ok")
+  disp$I_k        <- round(disp$I_k,   3)
+  disp$psi_nu     <- round(disp$psi_nu, 4)
+  disp$phi_k      <- round(disp$phi_k,  3)
+  disp$rho_k      <- round(disp$rho_k,  3)
+
+  print(as.data.frame(disp), row.names = FALSE)
+
+  n_flagged <- sum(x$flag)
+  if (n_flagged > 0) {
+    cat(sprintf(
+      "\n%d factor(s) flagged as weak links (rho_k < %.2f).\n",
+      n_flagged, thr
+    ))
+  } else {
+    cat(sprintf("\nAll factors meet the reliability threshold (%.2f).\n", thr))
+  }
+
+  invisible(x)
+}
+
+
+# -----------------------------------------------------------------------------
+#' Plot method for \code{scfa_diagnostics} objects
+#'
+#' Produces a bar chart of per-factor score reliability (\eqn{\hat\rho_k})
+#' with a horizontal line at the diagnostic threshold.  Bars below the
+#' threshold are coloured red to draw attention to weak links.
+#'
+#' @param x An object of class \code{scfa_diagnostics}.
+#' @param ... Additional arguments (currently ignored).
+#'
+#' @return A \code{ggplot2} object (invisibly), or base-graphics output if
+#'   \pkg{ggplot2} is not available.
+#'
+#' @export
+plot.scfa_diagnostics <- function(x, ...) {
+  thr <- attr(x, "threshold")
+  if (is.null(thr)) thr <- 0.70
+
+  if (requireNamespace("ggplot2", quietly = TRUE)) {
+    p <- ggplot2::ggplot(
+      data = x,
+      mapping = ggplot2::aes(
+        x    = factor(.data$factor, levels = .data$factor),
+        y    = .data$rho_k,
+        fill = .data$flag
+      )
+    ) +
+      ggplot2::geom_col(width = 0.6) +
+      ggplot2::geom_hline(yintercept = thr, linetype = "dashed", colour = "black") +
+      ggplot2::annotate(
+        "text",
+        x     = 0.5, y = thr + 0.02,
+        label = paste0("threshold = ", thr),
+        hjust = 0, size = 3
+      ) +
+      ggplot2::scale_fill_manual(
+        values = c("FALSE" = "steelblue", "TRUE" = "firebrick"),
+        labels = c("FALSE" = "OK", "TRUE" = "Flagged"),
+        name   = NULL
+      ) +
+      ggplot2::scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+      ggplot2::labs(
+        title    = "Sequential CFA – Factor Score Reliability",
+        subtitle = sprintf("Dashed line = reliability threshold (%.2f)", thr),
+        x        = "Factor",
+        y        = expression(hat(rho)[k])
+      ) +
+      ggplot2::theme_bw(base_size = 12) +
+      ggplot2::theme(legend.position = "none")
+
+    print(p)
+    invisible(p)
+  } else {
+    # Fall back to base graphics
+    bar_cols <- ifelse(x$flag, "firebrick", "steelblue")
+    bp <- barplot(
+      x$rho_k,
+      names.arg = x$factor,
+      col       = bar_cols,
+      ylim      = c(0, 1),
+      ylab      = expression(hat(rho)[k]),
+      xlab      = "Factor",
+      main      = "Sequential CFA – Factor Score Reliability"
+    )
+    abline(h = thr, lty = 2)
+    invisible(bp)
+  }
 }

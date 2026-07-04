@@ -27,7 +27,7 @@
 
 **Sequential Confirmatory Factor Analysis (Sequential CFA)** is a novel statistical method for constructing hierarchical factor indices—such as national or sub-national composite measures—when sample sizes at upper levels of the hierarchy are small. Traditional hierarchical CFA attempts to estimate all levels of a factor model simultaneously, which can produce parameter bias and convergence failures under small-N conditions. Sequential CFA resolves this by estimating each level of the hierarchy independently, from the lowest to the highest, preserving the full sample size at each stage and eliminating the need to estimate cross-level covariances in a single model pass.
 
-This repository provides the preprint paper and (<!-- TODO: add links once code/scripts are published -->) associated analysis code for the Sequential CFA project.
+This repository provides the preprint paper and associated R package (`scfa`) implementing the Sequential CFA workflow.
 
 **Preprint:** <https://osf.io/preprints/osf/akxtv_v2>
 
@@ -74,81 +74,137 @@ Performance is evaluated using Monte Carlo simulations and a real-world applicat
 
 ```
 Sequential-Confirmatory-Factor-Analysis/
-├── README.md                              # This file
-├── LICENSE                                # Apache-2.0 license
-├── CITATION.cff                           # Machine-readable citation metadata
+├── README.md                                # This file
+├── DESCRIPTION                              # R package metadata
+├── NAMESPACE                                # R package exports
+├── LICENSE                                  # Apache-2.0 license
+├── CITATION.cff                             # Machine-readable citation metadata
 ├── Sequential_CFA_Paper___OSF_Preprint.pdf  # Preprint manuscript (PDF)
-└── R/
-    └── scfa_propagation.R                 # Error-propagation diagnostic functions
+├── R/
+│   ├── scfa_propagation.R    # Error-propagation diagnostics & corrections
+│   └── run_scfa.R            # High-level orchestration function
+├── man/                      # Roxygen2-generated documentation
+├── vignettes/
+│   └── sequential-cfa-workflow.Rmd  # End-to-end tutorial
+└── tests/
+    └── testthat/             # testthat unit & integration tests
 ```
-
-> **TODO:** Once additional analysis scripts and/or data are added to this repository, update this section further (e.g., `data/`, `output/`, `simulations/`).
 
 ---
 
 ## Installation / Requirements
 
-The analysis requires **R** (the standard environment for CFA via packages such as `lavaan`). Requirements:
+This repository is structured as a standard R package. Install it directly from
+GitHub with:
+
+```r
+# install.packages("remotes")
+remotes::install_github("zachessesjohnson/Sequential-Confirmatory-Factor-Analysis")
+```
+
+Alternatively, clone the repository and install locally:
+
+```r
+# From the repository root
+remotes::install_local(".")
+```
+
+**Requirements:**
 
 - **R** ≥ 4.0.0
-- R packages:
-  - [`lavaan`](https://lavaan.ugent.be/) – for CFA model fitting at each stage
-  - [`blavaan`](https://ecmerkle.github.io/blavaan/) – for Bayesian CFA
-  - Additional packages for data manipulation and visualization (e.g., `tidyverse`, `ggplot2`)
+- R packages (installed automatically when using `remotes::install_github()`):
+  - [`lavaan`](https://lavaan.ugent.be/) ≥ 0.6 – CFA model fitting at each stage
+  - [`ggplot2`](https://ggplot2.tidyverse.org/) *(optional)* – enhanced diagnostic plots
 
-### Installing R packages
-
-```r
-install.packages(c("lavaan", "blavaan", "tidyverse", "ggplot2"))
-```
-
-### Loading the SCFA helper functions
+For Bayesian CFA comparisons described in the paper:
 
 ```r
-source("R/scfa_propagation.R")   # requires lavaan to be installed
+install.packages("blavaan")
 ```
-
-> **TODO:** Confirm exact R version and package versions used in the analysis and add a `renv.lock` or `sessionInfo()` output for reproducibility.
 
 ---
 
 ## Quick Start
 
-> **TODO:** Update with exact steps once scripts are available.
-
-Suggested workflow based on the paper's methodology:
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/zachessesjohnson/Sequential-Confirmatory-Factor-Analysis.git
-   cd Sequential-Confirmatory-Factor-Analysis
-   ```
-
-2. **Install required R packages** (see [Installation / Requirements](#installation--requirements)).
-
-3. **Prepare your data** (see [Data](#data)).
-
-4. **Run the sequential CFA analysis:**
+1. **Install the package:**
    ```r
-   # TODO: Replace with actual script path once published
-   source("R/run_sequential_cfa.R")
+   remotes::install_github("zachessesjohnson/Sequential-Confirmatory-Factor-Analysis")
    ```
 
-5. **Inspect outputs** in the `output/` directory (see [Results](#results)).
+2. **Load the package and run the full workflow with one call:**
+   ```r
+   library(lavaan)
+   library(scfa)
+
+   result <- run_scfa(
+     stage_models = list(
+       "subfactor1 =~ x1 + x2 + x3
+        subfactor2 =~ x4 + x5 + x6",
+       "index =~ subfactor1 + subfactor2"
+     ),
+     data      = your_data,
+     method    = "bartlett",
+     threshold = 0.70
+   )
+
+   print(result)
+   head(result$index_scores)
+   ```
+
+3. **Inspect propagation diagnostics:**
+   ```r
+   print(result$diagnostics$stage_1)
+   plot(result$diagnostics$stage_1)
+   ```
+
+4. **Read the vignette** for a complete walk-through:
+   ```r
+   vignette("sequential-cfa-workflow", package = "scfa")
+   ```
 
 ---
 
 ## Usage Examples
 
-### Error-propagation diagnostics (recommended pre-Stage-2 check)
-
-Source the helper file and run the diagnostics on your fitted Stage-1 model to
-assess how much estimation error will propagate forward before you ever run
-Stage 2.
+### One-call orchestration with `run_scfa()`
 
 ```r
 library(lavaan)
-source("R/scfa_propagation.R")
+library(scfa)
+
+result <- run_scfa(
+  stage_models = list(
+    "subfactor1 =~ item1 + item2 + item3
+     subfactor2 =~ item4 + item5 + item6",
+    "index =~ subfactor1 + subfactor2"
+  ),
+  data      = lower_level_data,
+  method    = "bartlett",
+  threshold = 0.70
+)
+
+# Summary
+print(result)
+
+# Stage-1 propagation diagnostics
+print(result$diagnostics$stage_1)
+plot(result$diagnostics$stage_1)
+
+# Final index scores
+head(result$index_scores)
+
+# Residual variance correction (Bartlett workflow)
+result$correction
+```
+
+### Error-propagation diagnostics (recommended pre-Stage-2 check)
+
+Run the diagnostics on your fitted Stage-1 model to assess how much estimation
+error will propagate forward before you ever run Stage 2.
+
+```r
+library(lavaan)
+library(scfa)
 
 # --- Stage 1: fit lower-level CFA ---
 model_stage1 <- '
@@ -161,8 +217,11 @@ fit_stage1 <- cfa(model_stage1, data = lower_level_data)
 diag <- scfa_propagation_diagnostics(fit_stage1)
 print(diag)
 #   factor n_indicators  I_k psi_nu phi_k rho_k  flag
-# 1     f1            3 8.42   0.12   1.0  0.894 FALSE
-# 2     f2            3 3.17   0.32   1.0  0.760 FALSE
+# 1     f1            3 8.42   0.12   1.0  0.894    ok
+# 2     f2            3 3.17   0.32   1.0  0.760    ok
+
+# Visualise reliabilities
+plot(diag)
 
 # Individual quantities
 scfa_factor_information(fit_stage1)   # I_k
@@ -191,16 +250,35 @@ fit_stage2 <- cfa(model_stage2, data = upper_level_data)
 corrected_lambda <- scfa_correct_loadings(fit_stage2, fit_stage1)
 ```
 
-Under **Bartlett** scores no correction is needed (loadings are already
-asymptotically unbiased), but the propagated error variance `psi_nu_k` still
-inflates Stage-2 residual variances by the known amount
-`hat_psi_nu_k = 1 / hat_I_k`.
+### Correcting Stage-2 residual variances for Bartlett-score inflation
+
+Under **Bartlett** scores the loadings are asymptotically unbiased, but the
+propagated error variance `psi_nu_k = 1 / I_k` still inflates Stage-2 residual
+variances. Recover the adjusted residuals with:
+
+```r
+scores_bart <- as.data.frame(lavPredict(fit_stage1, method = "bartlett"))
+fit_stage2  <- cfa("higher_factor =~ subfactor1 + subfactor2",
+                    data = scores_bart)
+adj_theta   <- scfa_correct_residuals(fit_stage2, fit_stage1)
+```
+
+### Multi-stage (> 2 levels) propagation chain
+
+For three or more levels, `scfa_propagate_chain()` accumulates propagation
+variances stage by stage:
+
+```r
+chain <- scfa_propagate_chain(list(fit_stage1, fit_stage2, fit_stage3))
+# Cumulative propagation variance entering Stage 3
+chain[["stage_3"]]
+```
 
 ### Complete sequential CFA workflow
 
 ```r
 library(lavaan)
-source("R/scfa_propagation.R")
+library(scfa)
 
 # Stage 1
 model_stage1 <- '
@@ -229,24 +307,25 @@ The paper includes Monte Carlo simulations comparing Sequential CFA against trad
 - Model complexity levels
 - Data skewness conditions
 
-> **TODO:** Link to simulation scripts once published.
+Simulation scripts will be added to this repository once the paper is accepted for publication.
 
 ### WJP Rule of Law Index Application
 
 The paper demonstrates the method using the World Justice Project (WJP) Rule of Law Index dataset.
 
-> **TODO:** Add instructions for obtaining the WJP data and running the empirical application scripts.
+- **Obtain the data:** Download the dataset from <https://worldjusticeproject.org/rule-of-law-index/>.
+- Application scripts will be added to this repository once the paper is accepted for publication.
 
 ---
 
 ## Reproducibility
 
-> **TODO:** Add specific seeds, R version, and package version information once scripts are published.
-
 To support reproducibility:
 
-- Monte Carlo simulations should be run with a fixed random seed (e.g., `set.seed(12345)` in R).
-- A `renv.lock` file or `sessionInfo()` snapshot is recommended to capture the exact package environment.
+- Monte Carlo simulations use a fixed random seed (`set.seed(12345)` in R).
+- To capture the exact package environment used when analysing results, run
+  `renv::snapshot()` after installing all dependencies; commit the resulting
+  `renv.lock` file.
 - All analysis scripts should be run in the order documented in the Quick Start section.
 
 ---
@@ -260,7 +339,7 @@ The main findings from the paper are:
 - **For highly complex hierarchical models**, the two approaches perform similarly.
 - **Sequential CFA provides valid estimates** in cases where traditional or Bayesian CFA fail to converge entirely.
 
-> **TODO:** Once output files are added to the repository, describe the output directory structure and file names produced by the scripts (e.g., factor score tables, simulation result CSVs, figures).
+Output files (factor score tables, simulation result CSVs, figures) will be added to an `output/` directory once scripts are published.
 
 ---
 
@@ -273,8 +352,6 @@ The empirical application in the paper uses the **WJP Rule of Law Index** datase
 - **Privacy:** The WJP data used in this analysis is aggregated at the country level and does not contain personally identifiable information.
 
 Monte Carlo simulation data are generated synthetically within the analysis scripts and do not require external data sources.
-
-> **TODO:** Confirm exact dataset version/year used and add download/access instructions once scripts are published.
 
 ---
 

@@ -1,0 +1,231 @@
+---
+title: "Sequential CFA Workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Sequential CFA Workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>"
+)
+```
+
+## Introduction
+
+**Sequential Confirmatory Factor Analysis (Sequential CFA)** is a hierarchical
+factor analysis approach that estimates each level of the hierarchy
+*independently* rather than simultaneously. The key benefits are:
+
+- The full observed-data sample size is preserved at every stage.
+- Cross-level covariance structures do not need to be parameterised together.
+- Valid estimates can be obtained in cases where traditional or Bayesian CFA
+  fails to converge.
+
+This vignette walks through the complete two-stage workflow using simulated
+data: simulate → Stage 1 → propagation diagnostics → Stage 2 → correction →
+composite index scores.
+
+```{r load}
+library(lavaan)
+library(scfa)
+```
+
+---
+
+## Step 1 — Simulate a Two-Level Hierarchy
+
+We generate data from a known population model with two sub-factors
+(`subfactor1`, `subfactor2`) that load onto a higher-level index factor.
+
+```{r simulate}
+set.seed(42)
+
+pop_model <- "
+  subfactor1 =~ 0.7*x1 + 0.7*x2 + 0.7*x3
+  subfactor2 =~ 0.8*x4 + 0.8*x5 + 0.8*x6
+  subfactor1 ~~ 1*subfactor1
+  subfactor2 ~~ 1*subfactor2
+  subfactor1 ~~ 0*subfactor2
+  x1 ~~ 0.51*x1; x2 ~~ 0.51*x2; x3 ~~ 0.51*x3
+  x4 ~~ 0.36*x4; x5 ~~ 0.36*x5; x6 ~~ 0.36*x6
+"
+
+dat <- simulateData(pop_model, sample.nobs = 400, model.type = "sem")
+head(dat)
+```
+
+---
+
+## Step 2 — Fit the Stage-1 (Sub-factor) CFA
+
+Fit a standard CFA to the observed indicators at the lowest level of the
+hierarchy.
+
+```{r stage1}
+model_stage1 <- "
+  subfactor1 =~ x1 + x2 + x3
+  subfactor2 =~ x4 + x5 + x6
+"
+
+fit_stage1 <- cfa(model_stage1, data = dat, std.lv = TRUE)
+summary(fit_stage1, fit.measures = TRUE)
+```
+
+---
+
+## Step 3 — Error-Propagation Diagnostics
+
+Before running Stage 2, assess how much estimation error will propagate
+forward. The key quantity is the **factor score reliability** \(\hat\rho_k\):
+a value close to 1 means the Stage-1 factor score is nearly error-free; a
+value below the threshold (default 0.70) flags a weak link.
+
+```{r diagnostics}
+diag_tbl <- scfa_propagation_diagnostics(fit_stage1, threshold = 0.70)
+print(diag_tbl)
+```
+
+The table reports:
+
+| Column | Meaning |
+|--------|---------|
+| `I_k` | Fisher information — how much the indicators tell us about the factor |
+| `psi_nu` | Propagation variance \(1/I_k\) — noise injected into Stage-2 residuals |
+| `phi_k` | Estimated factor variance |
+| `rho_k` | Score reliability \(\phi_k I_k / (\phi_k I_k + 1)\) |
+| `flag` | `TRUE` if \(\rho_k\) is below the threshold |
+
+You can also visualise the reliabilities:
+
+```{r plot-diag, fig.width = 6, fig.height = 4}
+plot(diag_tbl)
+```
+
+---
+
+## Step 4 — Extract Stage-1 Factor Scores
+
+Use **Bartlett** scores (asymptotically unbiased) as inputs to Stage 2.
+
+```{r scores}
+scores_stage1 <- as.data.frame(lavPredict(fit_stage1, method = "bartlett"))
+head(scores_stage1)
+```
+
+---
+
+## Step 5 — Fit the Stage-2 (Index) CFA
+
+Use the Stage-1 factor scores as *observed* indicators for the higher-level
+index factor.
+
+```{r stage2}
+model_stage2 <- "index =~ subfactor1 + subfactor2"
+
+fit_stage2 <- cfa(model_stage2, data = scores_stage1, std.lv = TRUE)
+summary(fit_stage2, fit.measures = TRUE)
+```
+
+---
+
+## Step 6 — Correct for Propagated Error (Bartlett Scores)
+
+Under Bartlett scores the Stage-2 **loadings** are asymptotically unbiased, but
+each Stage-2 **residual variance** is inflated by the Stage-1 propagation
+variance \(\hat\psi_{\nu,k} = 1/\hat I_k\). Use `scfa_correct_residuals()` to
+recover the true residual variance.
+
+```{r correct-residuals}
+adj_theta <- scfa_correct_residuals(fit_stage2, fit_stage1)
+adj_theta
+```
+
+> If you had used **regression** scores instead, the residual inflation is
+> absorbed into an attenuation bias on the loadings. Use
+> `scfa_correct_loadings()` in that case.
+
+---
+
+## Step 7 — Extract Final Index Scores
+
+```{r index}
+index_scores <- lavPredict(fit_stage2)
+head(index_scores)
+```
+
+These are the composite index scores for each observation.
+
+---
+
+## Streamlined: Using `run_scfa()`
+
+All the steps above can be wrapped in a single call to `run_scfa()`:
+
+```{r run-scfa}
+result <- run_scfa(
+  stage_models = list(
+    "subfactor1 =~ x1 + x2 + x3
+     subfactor2 =~ x4 + x5 + x6",
+    "index =~ subfactor1 + subfactor2"
+  ),
+  data      = dat,
+  method    = "bartlett",
+  threshold = 0.70,
+  cfa_args  = list(std.lv = TRUE)
+)
+
+print(result)
+
+# Stage-1 diagnostics
+print(result$diagnostics$stage_1)
+
+# Final index scores
+head(result$index_scores)
+
+# Residual variance correction (Bartlett workflow)
+result$correction
+```
+
+The `result` object also contains the full propagation chain:
+
+```{r chain}
+result$propagation_chain
+```
+
+---
+
+## Three-Level Hierarchy Example
+
+For a three-level hierarchy (item → sub-factor → factor → index), simply pass
+three model strings. `scfa_propagate_chain()` accumulates propagation variances
+across all stages:
+
+```{r three-level, eval = FALSE}
+result3 <- run_scfa(
+  stage_models = list(
+    # Stage 1: items -> sub-factors
+    "sf1 =~ i1 + i2 + i3
+     sf2 =~ i4 + i5 + i6",
+    # Stage 2: sub-factors -> factors
+    "f1 =~ sf1 + sf2
+     f2 =~ sf3 + sf4",
+    # Stage 3: factors -> index
+    "index =~ f1 + f2"
+  ),
+  data = my_data
+)
+
+# Cumulative propagation variance entering Stage 3
+result3$propagation_chain[["stage_3"]]
+```
+
+---
+
+## References
+
+Essesjohnson, Z. (2024). *Sequential Confirmatory Factor Analysis*. OSF
+Preprints. <https://osf.io/preprints/osf/akxtv_v2>
