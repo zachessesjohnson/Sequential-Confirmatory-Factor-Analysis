@@ -151,7 +151,7 @@ run_scfa <- function(stage_models,
   # ---- Fit each stage --------------------------------------------------------
   for (s in seq_len(n_stages)) {
     fit_s <- do.call(
-      lavaan::cfa,
+      "cfa",
       c(list(model = stage_models[[s]], data = current_data), cfa_args)
     )
 

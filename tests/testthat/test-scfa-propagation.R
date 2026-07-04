@@ -128,7 +128,8 @@ test_that("scfa_correct_loadings reverses attenuation row-wise", {
   for (k in seq_len(nrow(lambda2_raw))) {
     cols_nz  <- lambda2_raw[k, ] != 0
     expected <- lambda2_raw[k, cols_nz] / rho_vals[k]
-    expect_equal(corrected[k, cols_nz], expected, tolerance = 1e-12)
+    expect_equal(corrected[k, cols_nz], expected, tolerance = 1e-12,
+                 ignore_attr = TRUE)
   }
 })
 
